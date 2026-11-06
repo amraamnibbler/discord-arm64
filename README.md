@@ -1,21 +1,77 @@
-# Discord on Oracle ARM64
+# Discord on Oracle Cloud ARM64
 
-Run the Linux Discord desktop app on an Oracle Cloud Ampere A1 VM (Ubuntu 24.04 ARM64) using FEX-Emu. Discord's Linux app is x86_64, so it runs through emulation rather than as a native ARM app.
+Run the Linux Discord desktop app on an Oracle Cloud Ampere A1 VM (Ubuntu 24.04 ARM64). The Linux client is x86_64, so FEX-Emu is used to run it inside an x86_64 Ubuntu RootFS.
 
 ## Setup
 
-- Create an Ubuntu 24.04 ARM64 VM.
-- Install FEX-Emu and an Ubuntu 24.04 x86_64 RootFS.
-- Extract the RootFS to a writable folder. The path used below is `/opt/fex-emu/RootFS/Ubuntu_24_04-writable`.
-- Make sure the guest RootFS has the AMD64 version of `libatomic1` installed. The Discord app needs `libatomic.so.1`.
-- Install the Linux Discord client in `/home/streamdesk/config/discord/`. The version used here was 1.0.168.
-- Set up XFCE and XRDP for the desktop session.
+Install the desktop packages:
+
+```bash
+sudo apt install -y xfce4 xfce4-goodies xrdp xorgxrdp dbus-x11 squashfs-tools
+```
+
+Install FEX-Emu and get an Ubuntu 24.04 x86_64 RootFS image. The image used here was:
+
+```
+/opt/fex-emu/RootFS/Ubuntu_24_04.sqsh
+```
+
+Extract it to a writable directory:
+
+```
+sudo unsquashfs -no-progress \
+  -d /opt/fex-emu/RootFS/Ubuntu_24_04-writable \
+  /opt/fex-emu/RootFS/Ubuntu_24_04.sqsh
+```
+
+Discord also needs the AMD64 `libatomic1` library inside the guest RootFS. Download the Ubuntu 24.04 amd64 `.deb` (not the ARM64 host package), then extract it into the RootFS. The package used during this setup was `14.2.0-4ubuntu2~24.04.1`:
+
+```
+ROOTFS=/opt/fex-emu/RootFS/Ubuntu_24_04-writable
+sudo dpkg-deb -x /tmp/libatomic1_14.2.0-4ubuntu2_24.04.1_amd64.deb "$ROOTFS"
+```
+
+This extracts the library files into the guest filesystem; it does not install the package in the guest package database.
+
+The Discord x86_64 `.deb` was unpacked rather than installed on the ARM64 host:
+
+```
+mkdir -p ~/discord-amd64/root
+dpkg-deb -x ~/discord-amd64/discord.deb ~/discord-amd64/root
+```
+
+The versioned app directory used by the launch command is `/home/streamdesk/config/discord/app-1.0.168/`. Make sure the extracted Discord app files are in that directory and that the `Discord` executable is present there.
+
+## Connect to the desktop
+
+In `/etc/xrdp/xrdp.ini`, under `[Globals]`, set XRDP to listen on localhost only:
+
+```
+port=tcp://127.0.0.1:3389
+```
+
+Restart XRDP and check that it is listening on `127.0.0.1:3389`, not `0.0.0.0:3389`:
+
+```
+sudo systemctl restart xrdp
+sudo ss -ltnp | grep 3389
+```
+
+From Windows, open an SSH tunnel to the VM:
+
+```
+ssh -i "PATH_TO_PRIVATE_KEY" -N -L 3390:127.0.0.1:3389 ubuntu@YOUR_VM_PUBLIC_IP
+```
+
+Leave that terminal open, then open Remote Desktop and connect to `localhost:3390`. Log in to the XFCE session as `streamdesk`.
+
+The desktop was set to 1280x720 and XFCE compositing was turned off.
 
 ## Start Discord
 
-Run it from the desktop session:
+Run this from a terminal inside the `streamdesk` desktop session:
 
-```bash
+```
 FEX_ROOTFS=/opt/fex-emu/RootFS/Ubuntu_24_04-writable \
 FEX /home/streamdesk/config/discord/app-1.0.168/Discord \
   --disable-setuid-sandbox \
@@ -25,25 +81,13 @@ FEX /home/streamdesk/config/discord/app-1.0.168/Discord \
   --disable-site-isolation-trials
 ```
 
-The sandbox flag is needed for Electron to start in this setup. The site-isolation flag was used to get through the login/CAPTCHA issue.
-
-## Connect to the desktop
-
-Keep XRDP listening locally and connect through an SSH tunnel. From Windows:
-
-```powershell
-ssh -i "PATH_TO_PRIVATE_KEY" -N -L 3390:127.0.0.1:3389 ubuntu@YOUR_VM_PUBLIC_IP
-```
-
-Leave that terminal open, then open Remote Desktop and connect to `localhost:3390`.
-
-The desktop was set to 1280x720 and XFCE compositing was turned off.
+`--disable-setuid-sandbox` was needed to start Electron in this setup. `--disable-site-isolation-trials` was used to get past the login/CAPTCHA issue at the time; it may not be needed with a different Discord build.
 
 ## Notes
 
-- FEX is emulating x86_64 on ARM64; this is not a native ARM build of Discord.
-- There is no physical GPU on the VM. SwiftShader handles graphics in software.
-- Streaming was low-FPS on a 2 OCPU VM. Dropping the desktop resolution helped, but did not fix it completely.
+- This is x86_64 emulation on ARM64, not a native ARM build of Discord.
+- The VM has no physical GPU. SwiftShader handles graphics in software.
+- Streaming was low-FPS on a 2 OCPU VM. Lowering the desktop resolution helped, but did not fix it completely.
 - Audio may need more setup. PulseAudio showed `auto_null` devices in this configuration.
-- The commands and paths above are for Discord 1.0.168. Other versions may need changes.
+- The paths and launch flags above are for Discord 1.0.168. Other versions may need changes.
 - Log in, join the voice channel and start the stream manually.
